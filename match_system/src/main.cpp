@@ -8,15 +8,75 @@
 #include <thrift/transport/TBufferTransports.h>
 
 #include <iostream>
+#include <thread>
+#include <mutex>
+#include <condition_variable>
+#include <queue>
+#include <vector>
 
 using namespace ::apache::thrift;
 using namespace ::apache::thrift::protocol;
 using namespace ::apache::thrift::transport;
 using namespace ::apache::thrift::server;
 
-using namespace  ::match_server;
-
+using namespace ::match_server;
 using namespace std;
+
+struct Task
+{
+    User user;
+    string type;
+};//定义任务类型
+
+struct MessageQueue
+{
+    queue<Task> q;
+    mutex m;
+    condition_variable cv;
+} message_queue;//自我实现消息队列
+
+class Pool
+{
+    public:
+
+        void save_result(int a, int b)
+        {
+            cout << a << " " << b << endl;
+        }
+
+        void match()
+        {
+            while (users.size() > 1)
+            {
+                auto a = users[0], b = users[1];
+                users.erase(users.begin());
+                users.erase(users.begin());
+
+                save_result(a.userId, b.userId);
+            }
+        }
+
+        void add(User user)
+        {
+            users.push_back(user);
+        }
+
+
+        void remove(User user)
+        {
+            for (uint32_t i = 0; i < users.size(); i ++ ) //防止报警告，使用无符号int
+            {
+                if (users[i].userId == user.userId)
+                {
+                    users.erase(users.begin() + i);
+                    break;
+                }
+            }
+        }
+
+    private:
+    vector<User> users;
+} pool;
 
 class MatchHandler : virtual public MatchIf {
     public:
@@ -27,16 +87,62 @@ class MatchHandler : virtual public MatchIf {
         int32_t add_user(const User& user, const std::string& info) {
             // Your implementation goes here
             printf("add_user\n");
+
+            unique_lock<mutex> lck(message_queue.m);//生成一个锁，函数执行结束的时候，自动解锁
+            message_queue.q.push({user, "add"});
+            message_queue.cv.notify_all();//唤醒所有条件变量，所有被堵住的进程将会被唤醒
+            //message_queue.cv.notify_one();唤醒一个进程
+
             return 0;
         }
 
         int32_t remove_user(const User& user, const std::string& info) {
             // Your implementation goes here
             printf("remove_user\n");
+
+            unique_lock<mutex> lck(message_queue.m);//生成一个锁，函数执行结束的时候，自动解锁
+            message_queue.q.push({user, "remove"});
+            message_queue.cv.notify_all();//唤醒所有条件变量，所有被堵住的进程将会被唤醒
+
             return 0;
         }
 
 };
+
+
+void consume_task()
+{
+    while (true)
+    {
+        unique_lock<mutex> lck(message_queue.m);//占据锁
+        if (message_queue.q.empty())
+        {
+            //队列为空的时候应该卡住进程，防止死循环。
+            message_queue.cv.wait(lck);//将锁释放掉，然后卡住进程，等到某个地方将条件变量cv唤醒才会继续往下只执行
+            continue;
+        }
+        else
+        {
+            auto task = message_queue.q.front();
+            message_queue.q.pop();
+
+            //处理task
+            lck.unlock();//释放掉这个锁，防止持有锁的时间太长了，用完了记得及时解锁
+
+            if (task.type == "add")
+            {
+                pool.add(task.user);
+            }
+            else if (task.type == "remove")
+            {
+                pool.remove(task.user);
+            }
+
+            pool.match();
+        }
+    }
+}
+
 
 int main(int argc, char **argv) {
     int port = 9090;
@@ -49,6 +155,8 @@ int main(int argc, char **argv) {
     TSimpleServer server(processor, serverTransport, transportFactory, protocolFactory);
 
     cout << "Start Match Server" << endl;
+
+    thread matching_thread(consume_task);
 
     server.serve();
     return 0;
