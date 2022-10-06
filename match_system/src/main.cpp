@@ -160,7 +160,7 @@ void consume_task()
             //message_queue.cv.wait(lck);//将锁释放掉，然后卡住进程，等到某个地方将条件变量cv唤醒才会继续往下只执行
             lck.unlock();//直接解锁
             pool.match();
-            sleep(1000);
+            sleep(1);
             //continue;
         }
         else
