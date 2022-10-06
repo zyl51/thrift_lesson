@@ -9,6 +9,10 @@
 #include <thrift/transport/TBufferTransports.h>
 #include <thrift/transport/TTransportUtils.h>
 #include <thrift/transport/TSocket.h>
+#include <thrift/concurrency/ThreadManager.h>
+#include <thrift/concurrency/ThreadFactory.h>
+#include <thrift/TToString.h>
+#include <thrift/server/TThreadedServer.h>
 
 #include <iostream>
 #include <thread>
@@ -56,6 +60,7 @@ class Pool
                 transport->open();
 
                 bool res = client.save_data("acs_2202", "21caf915", a, b);
+
                 if (!res) cout << "success" << endl;
                 else cout << "failed" << endl;
 
@@ -71,9 +76,9 @@ class Pool
             while (users.size() > 1)
             {
                 sort(users.begin(), users.end(), [&](User& a, User& b)
-                {
-                    return a.score < b.score;
-                });
+                        {
+                        return a.score < b.score;
+                        });
 
                 bool flag = false;
                 for (uint32_t i = 1; i < users.size(); i ++ )
@@ -148,6 +153,24 @@ class MatchHandler : virtual public MatchIf {
 
 };
 
+class MatchCloneFactory : virtual public MatchIfFactory {
+    public:
+        ~MatchCloneFactory() override = default;
+        MatchIf* getHandler(const ::apache::thrift::TConnectionInfo& connInfo) override
+        {
+            std::shared_ptr<TSocket> sock = std::dynamic_pointer_cast<TSocket>(connInfo.transport);
+            /*cout << "Incoming connection\n";
+            cout << "\tSocketInfo: "  << sock->getSocketInfo() << "\n";
+            cout << "\tPeerHost: "    << sock->getPeerHost() << "\n";
+            cout << "\tPeerAddress: " << sock->getPeerAddress() << "\n";
+            cout << "\tPeerPort: "    << sock->getPeerPort() << "\n";
+            */
+            return new MatchHandler;
+        }
+        void releaseHandler(MatchIf* handler) override {
+            delete handler;
+        }
+};
 
 void consume_task()
 {
@@ -160,7 +183,7 @@ void consume_task()
             //message_queue.cv.wait(lck);//将锁释放掉，然后卡住进程，等到某个地方将条件变量cv唤醒才会继续往下只执行
             lck.unlock();//直接解锁
             pool.match();
-            sleep(1000);
+            sleep(1);
             //continue;
         }
         else
@@ -187,14 +210,11 @@ void consume_task()
 
 
 int main(int argc, char **argv) {
-    int port = 9090;
-    ::std::shared_ptr<MatchHandler> handler(new MatchHandler());
-    ::std::shared_ptr<TProcessor> processor(new MatchProcessor(handler));
-    ::std::shared_ptr<TServerTransport> serverTransport(new TServerSocket(port));
-    ::std::shared_ptr<TTransportFactory> transportFactory(new TBufferedTransportFactory());
-    ::std::shared_ptr<TProtocolFactory> protocolFactory(new TBinaryProtocolFactory());
-
-    TSimpleServer server(processor, serverTransport, transportFactory, protocolFactory);
+    TThreadedServer server(
+            std::make_shared<MatchProcessorFactory>(std::make_shared<MatchCloneFactory>()),
+            std::make_shared<TServerSocket>(9090), //port
+            std::make_shared<TBufferedTransportFactory>(),
+            std::make_shared<TBinaryProtocolFactory>());
 
     cout << "Start Match Server" << endl;
 
