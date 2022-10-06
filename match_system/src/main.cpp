@@ -55,7 +55,9 @@ class Pool
             try {
                 transport->open();
 
-                client.save_data("acs_2202", "21caf915", a, b);
+                bool res = client.save_data("acs_2202", "21caf915", a, b);
+                if (!res) cout << "success" << endl;
+                else cout << "failed" << endl;
 
                 transport->close();
             } catch (TException& tx) {
@@ -68,11 +70,28 @@ class Pool
         {
             while (users.size() > 1)
             {
-                auto a = users[0], b = users[1];
-                users.erase(users.begin());
-                users.erase(users.begin());
+                sort(users.begin(), users.end(), [&](User& a, User& b)
+                {
+                    return a.score < b.score;
+                });
 
-                save_result(a.userId, b.userId);
+                bool flag = false;
+                for (uint32_t i = 1; i < users.size(); i ++ )
+                {
+                    auto a = users[i - 1], b = users[i];
+                    if (b.score - a.score <= 50)
+                    {
+                        users.erase(users.begin() + i - 1);
+                        users.erase(users.begin() + i - 1);
+                        save_result(a.userId, b.userId);
+
+                        flag = true;
+                        break;
+                    }
+                }
+
+                if (!flag) break;
+
             }
         }
 
@@ -138,8 +157,11 @@ void consume_task()
         if (message_queue.q.empty())
         {
             //队列为空的时候应该卡住进程，防止死循环。
-            message_queue.cv.wait(lck);//将锁释放掉，然后卡住进程，等到某个地方将条件变量cv唤醒才会继续往下只执行
-            continue;
+            //message_queue.cv.wait(lck);//将锁释放掉，然后卡住进程，等到某个地方将条件变量cv唤醒才会继续往下只执行
+            lck.unlock();//直接解锁
+            pool.match();
+            sleep(1000);
+            //continue;
         }
         else
         {
